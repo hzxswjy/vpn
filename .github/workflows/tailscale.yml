@@ -1,0 +1,18 @@
+name: Tailscale CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  tailscale:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect to tailnet
+        uses: tailscale/github-action@v4
+        with:
+          auth-key: ${{ secrets.TS_AUTH_KEY }}
+          tags: tag:ci
+          ping: true
+
+      - name: Verify
+        run: tailscale status
