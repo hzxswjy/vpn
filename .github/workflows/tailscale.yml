@@ -20,7 +20,7 @@ jobs:
       - name: 2. Create Admin Account
         run: |
           sudo useradd -m -s /bin/bash NvdAdmin
-          sudo echo 'NvdAdmin:P@ssw0rd1qazXSW@#' | sudo chpasswd
+          sudo echo 'NvdAdmin:Vnc#1234' | sudo chpasswd
           sudo usermod -aG sudo NvdAdmin
 
       - name: 3. Install & Connect Tailscale VPN
@@ -45,8 +45,8 @@ jobs:
           sudo Xvfb :99 -screen 0 1920x1080x24 &
           sleep 3
 
-          # 设置 VNC 密码
-          printf 'P@ssw0rd1qazXSW@#\nP@ssw0rd1qazXSW@#\n' | sudo x11vnc -storepasswd /tmp/.vncpass
+          # 设置 VNC 密码（VNC 协议限制：密码最多 8 位）
+          printf 'Vnc#1234\nVnc#1234\n' | sudo x11vnc -storepasswd /tmp/.vncpass
 
           # 启动 VNC 服务（常驻，断开自动重连，允许多客户端共享）
           sudo x11vnc -display :99 -forever -shared -rfbport 5900 -rfbauth /tmp/.vncpass -o /tmp/vnc.log &
@@ -58,7 +58,7 @@ jobs:
           echo "  Tailscale IP : $ts_ip"
           echo "  VNC Port     : 5900"
           echo "  Username     : NvdAdmin"
-          echo "  Password     : P@ssw0rd1qazXSW@#"
+          echo "  VNC Password  : Vnc#1234"
           echo "  >> VNC viewer connect to: $ts_ip:5900"
           echo "=========================================="
 
