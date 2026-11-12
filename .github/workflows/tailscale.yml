@@ -1,18 +1,70 @@
-name: Tailscale CI
+name: Ubuntu Cloud VNC
 
 on:
   workflow_dispatch:
 
 jobs:
-  tailscale:
+  build:
     runs-on: ubuntu-latest
-    steps:
-      - name: Connect to tailnet
-        uses: tailscale/github-action@v4
-        with:
-          auth-key: ${{ secrets.TS_AUTH_KEY }}
-          tags: tag:ci
-          ping: true
+    timeout-minutes: 43200
 
-      - name: Verify
-        run: tailscale status
+    steps:
+      - name: 1. Enable Remote Desktop (VNC) & Firewall
+        run: |
+          # 安装 VNC 服务器和虚拟显示，并放行 VNC 端口
+          sudo apt-get update
+          sudo apt-get install -y x11vnc xvfb
+          sudo ufw allow 5900/tcp
+          sudo ufw --force enable
+
+      - name: 2. Create Admin Account
+        run: |
+          sudo useradd -m -s /bin/bash NvdAdmin
+          sudo echo 'NvdAdmin:P@ssw0rd1qazXSW@#' | sudo chpasswd
+          sudo usermod -aG sudo NvdAdmin
+
+      - name: 3. Install & Connect Tailscale VPN
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          # 添加 Tailscale 官方源并安装
+          curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg
+          curl -fsSL https://pkgs.tailscale.com/stable/debian/bookworm.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt-get update
+          sudo apt-get install -y tailscale
+
+          # 连接 Tailscale 网络
+          sudo tailscale up --auth-key="$TAILSCALE_AUTHKEY" --hostname="github-vnc-server"
+
+          sleep 8
+
+          # 获取 Tailscale IP
+          ts_ip=$(sudo tailscale ip -4)
+
+          # 启动虚拟显示（无需物理显示器）
+          sudo Xvfb :99 -screen 0 1920x1080x24 &
+          sleep 3
+
+          # 设置 VNC 密码
+          printf 'P@ssw0rd1qazXSW@#\nP@ssw0rd1qazXSW@#\n' | sudo x11vnc -storepasswd /tmp/.vncpass
+
+          # 启动 VNC 服务（常驻，断开自动重连，允许多客户端共享）
+          sudo x11vnc -display :99 -forever -shared -rfbport 5900 -rfbauth /tmp/.vncpass -o /tmp/vnc.log &
+          sleep 3
+
+          echo ""
+          echo "=========================================="
+          echo "  >>> VNC SERVER IS READY! <<<"
+          echo "  Tailscale IP : $ts_ip"
+          echo "  VNC Port     : 5900"
+          echo "  Username     : NvdAdmin"
+          echo "  Password     : P@ssw0rd1qazXSW@#"
+          echo "  >> VNC viewer connect to: $ts_ip:5900"
+          echo "=========================================="
+
+      - name: 4. Keep Server Alive (30 Days)
+        run: |
+          for i in $(seq 1 43200); do
+              sleep 60
+              echo "[$i/43200] Server running..."
+          done
