@@ -1,0 +1,87 @@
+name: Windows Cloud RDP
+
+on:
+  workflow_dispatch:
+
+# 仓库必须先配置 3 个 secrets（Settings → Secrets and variables → Actions）：
+#   RDP_PASSWORD      —— RDP 登录密码（不要写在这里，不要带进日志）
+#   TAILSCALE_AUTHKEY —— Tailscale 一次性 authkey（建议勾选 Ephemeral + 短过期时间）
+# 说明：为了不违反 GitHub 服务条款，此工作流仅建议用于短期远程测试，勿当长期云电脑用。
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 360          # GitHub 托管 runner 硬上限就是 360，超过必被强制取消
+
+    steps:
+      - name: 1. Enable Remote Desktop & Firewall (keep NLA on)
+        run: |
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          # 注意：不再关闭 UserAuthentication（NLA），保留网络级认证更安全。
+          # Tailscale 网络内正常走 NLA，RDP 客户端输入账号密码即可。
+
+      - name: 2. Create Admin Account (password from secret)
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          if (-not $Env:RDP_PASSWORD) { throw "Secret RDP_PASSWORD 未配置" }
+          $pwd = ConvertTo-SecureString $Env:RDP_PASSWORD -AsPlainText -Force
+          New-LocalUser -Name "admin" -Password $pwd -PasswordNeverExpires -AccountNeverExpires -ErrorAction SilentlyContinue
+          Add-LocalGroupMember -Group "Administrators" -Member "admin" -ErrorAction SilentlyContinue
+          Write-Host "管理员账号 admin 已创建（密码不回显）"
+          # 不再修改 runneradmin：那是 GitHub 自带账号，保持原样即可。
+
+      - name: 3. Install & Connect Tailscale (with retry)
+        env:
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          $tsExe = "C:\Program Files\Tailscale\tailscale.exe"
+          $ok = $false
+          for ($try = 1; $try -le 3; $try++) {
+            try {
+              if (-not (Test-Path $tsExe)) {
+                Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "C:\tailscale.msi" -UseBasicParsing
+                Start-Process msiexec -ArgumentList "/i C:\tailscale.msi /quiet /norestart" -Wait
+              }
+              Start-Sleep -Seconds 5
+              & $tsExe up --authkey="$Env:TAILSCALE_AUTHKEY" --hostname="github-rdp-server"
+              if ($LASTEXITCODE -ne 0) { throw "tailscale up 退出码 $LASTEXITCODE" }
+              $ok = $true
+              break
+            } catch {
+              Write-Host "第 $try 次尝试失败: $_"
+              Start-Sleep -Seconds 10
+            }
+          }
+          if (-not $ok) { throw "Tailscale 连接 3 次均失败，终止任务（避免空跑 6 小时）" }
+
+          $ts_ip = & $tsExe ip -4
+          if (-not $ts_ip) { throw "未获取到 Tailscale IP" }
+          Write-Host ""
+          Write-Host "==========================================" -ForegroundColor Green
+          Write-Host "  RDP SERVER READY" -ForegroundColor Cyan
+          Write-Host "  Tailscale IP : $ts_ip"          -ForegroundColor Yellow
+          Write-Host "  Username     : admin"          -ForegroundColor Yellow
+          Write-Host "  Password     : (见 secrets.RDP_PASSWORD，不回显)" -ForegroundColor Yellow
+          Write-Host "  >> mstsc 连接上面的 IP 即可" -ForegroundColor Magenta
+          Write-Host "==========================================" -ForegroundColor Green
+
+      - name: 4. Install WeType (微信输入法)
+        run: |
+          # 官网直链（2026-11-16 验证可用，HTTP 200）：
+          # https://download.z.weixin.qq.com/app/win/wetype_installer_official_p_66.exe
+          # 版本随官网更新会变，失效时去 https://type.weixin.qq.com 抓新链接替换。
+          $url = "https://download.z.weixin.qq.com/app/win/wetype_installer_official_p_66.exe"
+          $out = "C:\wetype_installer.exe"
+          Invoke-WebRequest $url -OutFile $out -UseBasicParsing
+          Start-Process $out -ArgumentList "/S" -Wait       # /S = NSIS 静默安装
+          Write-Host "微信输入法安装完成（若弹出了安装界面，连上 RDP 后手动点完即可）"
+
+      - name: 5. Keep Server Alive
+        timeout-minutes: 350        # 留 10 分钟余量，防止撞 360 上限时日志被砍
+        run: |
+          for ($i = 1; $i -le 210; $i++) {   # 210 分钟 × 60 秒 = 350 分钟
+            Start-Sleep -Seconds 60
+            Write-Host "[$i/210] Server running..."
+          }
