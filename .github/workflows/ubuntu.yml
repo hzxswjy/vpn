@@ -29,7 +29,14 @@ jobs:
           RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
         run: |
           if [ -z "$RDP_PASSWORD" ]; then echo "::error::Secret RDP_PASSWORD 未配置"; exit 1; fi
-          sudo useradd -m -s /bin/bash -G sudo,adm admin
+          # v2 修复：GitHub runner 镜像自带名为 admin 的组，
+          # useradd 默认新建同名组会撞名报 exit 9，所以先确保组存在、再用 -g 复用
+          getent group admin >/dev/null 2>&1 || sudo groupadd admin
+          if id admin >/dev/null 2>&1; then
+            echo "用户 admin 已存在，跳过创建"
+          else
+            sudo useradd -m -s /bin/bash -g admin -G sudo,adm admin
+          fi
           echo "admin:$RDP_PASSWORD" | sudo chpasswd
           # xrdp 会话默认启动 XFCE 桌面
           echo "startxfce4" | sudo tee /home/admin/.xsession > /dev/null
